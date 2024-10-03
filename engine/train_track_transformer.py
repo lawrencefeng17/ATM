@@ -111,6 +111,8 @@ def main(cfg: DictConfig):
 
                     caption = f"reconstruction (right) @ epoch {epoch}; \n Track MSE: {vis_dict['track_loss']:.4f}"
                     wandb_vis_track = wandb.Video(vis_dict["combined_track_vid"], fps=10, format="mp4", caption=caption)
+                    # save video locally
+                    # vis_dict["combined_track_vid"].save(f"{work_dir}/{mode}_reconstruct_track_{epoch}.mp4")
                     None if cfg.dry else wandb.log({f"{mode}/reconstruct_track": wandb_vis_track, f"{mode}/epoch": epoch})
 
                 vis_and_log(model, train_vis_dataloader, mode="train")

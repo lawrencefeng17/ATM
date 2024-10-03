@@ -263,21 +263,10 @@ def flush():
     torch.cuda.empty_cache()
     gc.collect()
 
-<<<<<<< HEAD
-            gc.collect()
-            torch.cuda.empty_cache()
-            # except Exception as e:
-            #     print(f"Exception {e} when processing {demo_k}")
-            #     gc.collect()
-            #     torch.cuda.empty_cache()
-            #     print("attempting again")
-            #     continue
-=======
     # print(f"Memory Allocated: {torch.cuda.memory_allocated("cuda"") / 1024/1024} MB")
     # print(f"Memory Reserved: {torch.cuda.memory_reserved("cuda") / 1024/1024} MB")
     # print(f"Max Memory Allocated: {torch.cuda.max_memory_allocated("cuda") / 1024/1024} MB")
     # print(f"Max Memory Reserved: {torch.cuda.max_memory_reserved("cuda") / 1024/1024} MB")
->>>>>>> debug
 
 @click.command()
 @click.option("--root", type=str, default="./data/")

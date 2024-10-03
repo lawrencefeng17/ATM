@@ -1,8 +1,11 @@
 import numpy as np
 
+from easydict import EasyDict
+from glob import glob
+
 from atm.dataloader.base_dataset import BaseDataset
 from atm.utils.flow_utils import sample_tracks_visible_first
-
+from scripts.preprocess_libero import get_task_embs, get_task_name_from_file_name
 
 class ATMPretrainDataset(BaseDataset):
     def __init__(self, *args, **kwargs):
@@ -58,7 +61,22 @@ class ATMPretrainDataset(BaseDataset):
 
         tracks = demo["root"][view]["tracks"][time_offset:time_offset + self.num_track_ts]  # track_len n 2
         vis = demo["root"][view]['vis'][time_offset:time_offset + self.num_track_ts]  # track_len n
-        task_emb = demo["root"]["task_emb_bert"]  # (dim,)
+
+        """SHOULD REPLACE TASK EMBEDDING HERE"""
+        """EMBED WITH BERT AND CHECK THAT EMBEDDINGS ARE THE SAME"""
+        # task_emb = demo["root"]["task_emb_bert"]  # (dim,)
+
+        demo_pth = self._demo_id_to_path[demo_id]
+        task_description = demo_pth.split('/')[-2]
+        cfg = EasyDict({
+            "task_embedding_format": "bert",
+            "task_embedding_one_hot_offset": 1,
+            "data": {"max_word_len": 25},
+            "policy": {"language_encoder": {"network_kwargs": {"input_size": 768}}}
+        })
+        
+        task_emb = get_task_embs(cfg, task_description)
+        print(task_description)
 
         # augment videos
         if np.random.rand() < self.aug_prob:
@@ -72,3 +90,4 @@ class ATMPretrainDataset(BaseDataset):
         tracks, vis = sample_tracks_visible_first(tracks, vis, num_samples=self.num_track_ids)
 
         return vids, tracks, vis, task_emb
+    

@@ -12,7 +12,7 @@ from libero import benchmark, get_libero_path
 from libero.envs import OffScreenRenderEnv, DummyVectorEnv, SubprocVecEnv
 from libero.envs.env_wrapper import ControlEnv
 from robosuite.wrappers import Wrapper
-
+from scripts.preprocess_libero import get_task_embs
 
 def merge_dict(dict_obj):
     merged_dict = {}
@@ -117,6 +117,10 @@ def make_libero_env(task_suite_name, task_name, img_h, img_w, task_embedding=Non
         task_embs = torch.from_numpy(np.stack([task_embedding_map[des] for des in descriptions]))
     else:
         task_embs = task_embedding
+
+    # get descriptions from file names
+    descriptons = [file_name for file_name in os.listdir(os.path.join(get_libero_path("bddl_files"), task_suite_name))]
+    task_embs = get_task_embs(cfg, descriptions)
     task_suite.set_task_embs(task_embs)
 
     # retrieve a specific task
