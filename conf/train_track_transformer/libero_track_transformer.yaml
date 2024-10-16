@@ -22,12 +22,12 @@ lr: 1e-4
 batch_size: 256
 mix_precision: true
 num_workers: 8
-val_freq: 10
+val_freq: 1
 save_freq: 10
 clip_grad: 10.
 epochs: 1001
-seed: 429
-dry: true
+seed: 0
+dry: false
 
 model_name: TrackTransformer
 p_img: 0.5
@@ -65,7 +65,7 @@ scheduler_cfg:
     T_max: ${epochs}
 
 model_cfg:
-  load_path: null
+  load_path: /home/lawrence/ATM/results/track_transformer/libero_track_transformer_libero-spatial/model_best.ckpt
   transformer_cfg: 
     dim: ${dim}
     dim_head: ${dim_head}

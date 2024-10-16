@@ -64,19 +64,19 @@ class ATMPretrainDataset(BaseDataset):
 
         """SHOULD REPLACE TASK EMBEDDING HERE"""
         """EMBED WITH BERT AND CHECK THAT EMBEDDINGS ARE THE SAME"""
-        # task_emb = demo["root"]["task_emb_bert"]  # (dim,)
+        task_emb = demo["root"]["task_emb_bert"]  # (dim,)
 
-        demo_pth = self._demo_id_to_path[demo_id]
-        task_description = demo_pth.split('/')[-2]
-        cfg = EasyDict({
-            "task_embedding_format": "bert",
-            "task_embedding_one_hot_offset": 1,
-            "data": {"max_word_len": 25},
-            "policy": {"language_encoder": {"network_kwargs": {"input_size": 768}}}
-        })
+        # demo_pth = self._demo_id_to_path[demo_id]
+        # task_description = demo_pth.split('/')[-2]
+        # cfg = EasyDict({
+        #     "task_embedding_format": "bert",
+        #     "task_embedding_one_hot_offset": 1,
+        #     "data": {"max_word_len": 25},
+        #     "policy": {"language_encoder": {"network_kwargs": {"input_size": 768}}}
+        # })
         
-        task_emb = get_task_embs(cfg, task_description)
-        print(task_description)
+        # task_emb = get_task_embs(cfg, task_description)
+        # task_emb = task_emb.squeeze(0)  # (dim,)
 
         # augment videos
         if np.random.rand() < self.aug_prob:
