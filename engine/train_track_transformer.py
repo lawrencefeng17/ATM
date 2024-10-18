@@ -54,26 +54,26 @@ def main(cfg: DictConfig):
     best_loss_logger = BestAvgLoss(window_size=5)
 
     for epoch in metric_logger.log_every(range(cfg.epochs), 1, ""):
-        train_metrics = run_one_epoch(
-            fabric,
-            model,
-            train_loader,
-            optimizer,
-            lbd_track=lbd_track,
-            lbd_img=lbd_img,
-            p_img=p_img,
-            scheduler=scheduler,
-            mix_precision=cfg.mix_precision,
-            clip_grad=cfg.clip_grad,
-            epoch=epoch
-        )
+        # train_metrics = run_one_epoch(
+        #     fabric,
+        #     model,
+        #     train_loader,
+        #     optimizer,
+        #     lbd_track=lbd_track,
+        #     lbd_img=lbd_img,
+        #     p_img=p_img,
+        #     scheduler=scheduler,
+        #     mix_precision=cfg.mix_precision,
+        #     clip_grad=cfg.clip_grad,
+        #     epoch=epoch
+        # )
 
-        train_metrics["train/lr"] = optimizer.param_groups[0]["lr"]
-        metric_logger.update(**train_metrics)
+        # train_metrics["train/lr"] = optimizer.param_groups[0]["lr"]
+        # metric_logger.update(**train_metrics)
 
-        train_metrics["train/epoch"] = epoch
-        if fabric.is_global_zero:
-            None if cfg.dry else wandb.log(train_metrics)
+        # train_metrics["train/epoch"] = epoch
+        # if fabric.is_global_zero:
+        #     None if cfg.dry else wandb.log(train_metrics)
 
             if epoch % cfg.val_freq == 0:
                 val_metrics = evaluate(

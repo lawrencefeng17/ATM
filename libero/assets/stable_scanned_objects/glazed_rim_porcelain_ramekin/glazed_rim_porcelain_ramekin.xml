@@ -1,6 +1,6 @@
 <mujoco model="glazed_rim_porcelain_ramekin">
   <asset>
-  <texture file="texture-red.png" name="tex-glazed_rim_porcelain_ramekin" type="2d" />
+  <texture file="texture-green.png" name="tex-glazed_rim_porcelain_ramekin" type="2d" />
   <material name="glazed_rim_porcelain_ramekin" reflectance="0.5" texrepeat="1 1" texture="tex-glazed_rim_porcelain_ramekin" texuniform="false" />
   <mesh file="visual/glazed_rim_porcelain_ramekin_vis.msh" name="glazed_rim_porcelain_ramekin_vis" scale="1.0 1.0 1.0" /></asset>
   <worldbody>
