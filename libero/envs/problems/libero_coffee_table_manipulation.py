@@ -20,6 +20,7 @@ class Libero_Coffee_Table_Manipulation(BDDLBaseDomain):
         self.coffee_table_offset = (0, 0, 0.41)
         # For z offset of environment fixtures
         self.z_offset = 0.01 - self.coffee_table_full_size[2]
+        breakpoint()
         kwargs.update(
             {"robots": [f"OnTheGround{robot_name}" for robot_name in kwargs["robots"]]}
         )
