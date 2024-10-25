@@ -1,4 +1,5 @@
 import h5py
+import argparse
 
 def print_hdf5_structure(file_name):
     with h5py.File(file_name, 'r') as file:
@@ -13,6 +14,12 @@ def print_hdf5_structure(file_name):
 
         file.visititems(print_structure)
 
-# Replace 'your_file.h5' with the path to your HDF5 file
-print_hdf5_structure('/home/lawrence/ATM/data/atm_libero/libero_spatial/pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate_demo/demo_0.hdf5')
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-f', type=str, required=True)
+
+    args = parser.parse_args()
+
+    print_hdf5_structure(args.f)
 

@@ -98,6 +98,7 @@ class BaseDataset(Dataset):
             demo_len = demo["root"][self.views[0]]["video"][0].shape[0]
 
             if self.cache_all:
+                breakpoint()
                 demo = self.process_demo(demo)
                 if not self.cache_image:
                     for v in self.views:

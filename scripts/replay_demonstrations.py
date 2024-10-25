@@ -1,131 +1,186 @@
-import argparse
-import h5py
-import numpy as np
-import cv2
 import os
 import sys
-from tqdm import tqdm
-
-# Add the parent directory of 'libero' to the Python path
+import h5py
+import numpy as np
+from pathlib import Path
 sys.path.append('/home/lawrence/ATM')
+from libero.envs import OffScreenRenderEnv
+from scripts.hdf5 import print_hdf5_structure
 
-from robosuite import load_controller_config
-from robosuite.wrappers import VisualizationWrapper
-from libero.envs import TASK_MAPPING
-import libero.envs.bddl_utils as BDDLUtils
-from robosuite.utils.binding_utils import MjRenderContextOffscreen
 
-def modify_object_colors(env, new_colors):
-    for obj_name, color in new_colors.items():
-        try:
-            obj_id = env.sim.model.geom_name2id(obj_name)
-            env.sim.model.geom_rgba[obj_id] = color + [1]  # RGB + alpha
-        except ValueError:
-            print(f"Warning: Object {obj_name} not found in the environment.")
+def render_new_videos(
+    input_hdf5_path,
+    output_hdf5_path,
+    bddl_file,
+    camera_names=["agentview", "eye_in_hand"],
+    camera_height=128,
+    camera_width=128
+):
+    """
+    Re-renders the agentview and eye_in_hand videos from an existing HDF5 demonstration file
+    assuming the simulation environment is already configured with modified XML files for object colors.
 
-def render_offscreen(sim, width, height, camera_name):
-    # Create an offscreen render context
-    render_context = MjRenderContextOffscreen(sim, device_id=-1)
+    Args:
+        input_hdf5_path (str): Path to the input HDF5 demonstration file.
+        output_hdf5_path (str): Path to save the new HDF5 demonstration file with updated videos.
+        bddl_file (str): Path to the BDDL file defining the task and environment.
+        camera_names (list, optional): List of camera names to render. Defaults to ["agentview", "eye_in_hand"].
+        camera_height (int, optional): Height of the camera images. Defaults to 128.
+        camera_width (int, optional): Width of the camera images. Defaults to 128.
+    """
 
-    # Set the camera
-    camera_id = sim.model.camera_name2id(camera_name)
-    render_context.render = True
-    render_context.vopt.geomgroup[:] = 1
-    render_context.scn.camera = camera_id
-    render_context.render()
+    # Ensure output directory exists
+    output_parent_dir = Path(output_hdf5_path).parent
+    output_parent_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read pixels
-    pixels = render_context.read_pixels(width, height, depth=False)[::-1, :, :]
-    return pixels
+    # Open the input and output HDF5 files
+    with h5py.File(input_hdf5_path, 'r') as infile, h5py.File(output_hdf5_path, 'w') as outfile:
+        # Function to copy all datasets and groups except video datasets
+        def copy_except_videos(name, obj):
+            if isinstance(obj, h5py.Dataset):
+                # Determine if the dataset is a video dataset
+                if name.endswith('video'):
+                    # Skip video datasets; they will be re-rendered
+                    return
+                else:
+                    # Create the same dataset in the output file
+                    outfile.create_dataset(name, data=obj[()], dtype=obj.dtype)
+            elif isinstance(obj, h5py.Group):
+                # Create the same group in the output file
+                outfile.create_group(name)
 
-def replay_demonstration(env, demo_file, output_dir, new_colors):
-    with h5py.File(demo_file, 'r') as f:
-        root = f["root"]
-        actions = root["actions"][()]
-        
-        views_to_modify = ['agentview', 'eye_in_hand']
-        original_frames = {view: root[view]["video"][0] for view in views_to_modify if view in root}
+        # Copy all datasets and groups except for the 'video' datasets
 
-    env.reset()
-    modify_object_colors(env, new_colors)
+        infile = infile['root']
+        infile.visititems(copy_except_videos)
 
-    new_frames = {view: [] for view in views_to_modify if view in original_frames}
+        # Extract actions and initial state
+        actions = infile['actions'][:]  # Shape: (num_steps, action_dim)
+        ee_states = infile['extra_states/ee_states'][:]  # Shape: (num_steps, 6)
 
-    for action in tqdm(actions, desc="Replaying demonstration"):
-        env.step(action)
-        for view in views_to_modify:
-            if view in original_frames:
-                frame = render_offscreen(
-                    env.sim,
-                    width=original_frames[view].shape[2],
-                    height=original_frames[view].shape[1],
-                    camera_name=view
-                )
-                new_frames[view].append(frame)
+        # Assume the initial state corresponds to the first step
+        initial_state = ee_states[0]
 
-    # Save the modified demonstration
-    with h5py.File(os.path.join(output_dir, 'modified_demo.hdf5'), 'w') as new_f:
-        with h5py.File(demo_file, 'r') as original_f:
-            # Copy the entire structure of the original file
-            original_f.copy(original_f['/'], new_f['/'])
+        # Initialize the simulation environment
+        env_args = {
+            "bddl_file_name": bddl_file,
+            "camera_heights": camera_height,
+            "camera_widths": camera_width,
+        }
+
+        env = OffScreenRenderEnv(**env_args)
+        env.reset()
+
+        """
+        TRYING TO FIGURE OUT HOW TO INITIALIZE ENVIRONMENT STATE FROM HDF5 FILE
+        """
+        env.set_init_state(initial_state)
+
+        # Initialize lists to store video frames
+        agentview_frames = []
+        eye_in_hand_frames = []
+
+        # Iterate through each action and step the environment
+        for idx, action in enumerate(actions):
+            # Perform the action
+            obs, reward, done, info = env.step(action)
+
+            # Capture images from each camera
+            for cam in camera_names:
+                cam_image_key = f"{cam}_image"
+                if cam_image_key in obs:
+                    frame = obs[cam_image_key]  # e.g., 'agentview_image', 'eye_in_hand_image'
+                    
+                    # Ensure frame shape is (3, height, width) and type uint8
+                    if frame.dtype != np.uint8:
+                        frame = (frame * 255).astype(np.uint8)
+                    
+                    if frame.shape[0] == 3:
+                        # Convert to (height, width, 3)
+                        frame = np.transpose(frame, (1, 2, 0))
+                    elif frame.shape[-1] == 3:
+                        # Already in (height, width, 3)
+                        pass
+                    else:
+                        raise ValueError(f"Unexpected frame shape: {frame.shape}")
+                    
+                    if cam == "agentview":
+                        agentview_frames.append(frame)
+                    elif cam == "eye_in_hand":
+                        eye_in_hand_frames.append(frame)
             
-            # Replace only the modified views
-            for view in views_to_modify:
-                if view in new_frames:
-                    del new_f['root'][view]['video']
-                    new_f['root'][view].create_dataset('video', data=[np.array(new_frames[view])])
+            if done:
+                break
 
-    # Save videos for each modified view
-    for view, frames in new_frames.items():
-        video_writer = cv2.VideoWriter(
-            os.path.join(output_dir, f'replay_{view}.mp4'),
-            cv2.VideoWriter_fourcc(*'mp4v'),
-            20,  # fps
-            (frames[0].shape[1], frames[0].shape[0])  # frame size (width, height)
-        )
-        for frame in frames:
-            video_writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        video_writer.release()
+        # Convert lists to numpy arrays
+        if agentview_frames:
+            agentview_video = np.stack(agentview_frames, axis=0)  # (num_steps, height, width, 3)
+            # Add a new axis to match original HDF5 structure (1, num_steps, 3, height, width)
+            agentview_video = np.transpose(agentview_video, (0, 3, 1, 2))  # (num_steps, 3, height, width)
+            agentview_video = np.expand_dims(agentview_video, axis=0)  # (1, num_steps, 3, height, width)
+        else:
+            print("No frames captured for agentview.")
+            agentview_video = np.empty((1, 0, 3, camera_height, camera_width), dtype=np.uint8)
 
-def main(args):
-    # Load environment configuration
-    controller_config = load_controller_config(default_controller="OSC_POSE")
+        if eye_in_hand_frames:
+            eye_in_hand_video = np.stack(eye_in_hand_frames, axis=0)  # (num_steps, height, width, 3)
+            # Add a new axis to match original HDF5 structure (1, num_steps, 3, height, width)
+            eye_in_hand_video = np.transpose(eye_in_hand_video, (0, 3, 1, 2))  # (num_steps, 3, height, width)
+            eye_in_hand_video = np.expand_dims(eye_in_hand_video, axis=0)  # (1, num_steps, 3, height, width)
+        else:
+            print("No frames captured for eye_in_hand.")
+            eye_in_hand_video = np.empty((1, 0, 3, camera_height, camera_width), dtype=np.uint8)
+
+        # Create the video datasets in the output HDF5 file
+        if 'agentview' not in outfile:
+            outfile.create_group('agentview')
+        outfile['agentview'].create_dataset('video', data=agentview_video, dtype='uint8')
+
+        if 'eye_in_hand' not in outfile:
+            outfile.create_group('eye_in_hand')
+        outfile['eye_in_hand'].create_dataset('video', data=eye_in_hand_video, dtype='uint8')
+
+        # Close the environment
+        env.close()
+
+
+# re_render_videos.py
+
+import argparse
+from pathlib import Path
+
+def main():
+    parser = argparse.ArgumentParser(description="Re-render videos in HDF5 demonstration files with updated object colors.")
+    parser.add_argument("--input_hdf5", type=str, required=True, help="Path to the input HDF5 file.")
+    parser.add_argument("--output_hdf5", type=str, required=True, help="Path to save the output HDF5 file with updated videos.")
+    parser.add_argument("--bddl_file", type=str, required=True, help="Path to the BDDL file defining the task and environment.")
+    parser.add_argument("--camera_height", type=int, default=128, help="Height of the camera images.")
+    parser.add_argument("--camera_width", type=int, default=128, help="Width of the camera images.")
+    parser.add_argument("--camera_names", type=str, nargs='+', default=["agentview", "eye_in_hand"], help="Names of the cameras to render.")
     
-    # Use the configuration from the original demonstration
-    config = {
-        "robots": ['Panda'],
-        "controller_configs": controller_config,
-    }
-
-    # Create environment
-    problem_info = BDDLUtils.get_problem_info(args.bddl_file)
-    problem_name = problem_info["problem_name"]
-    env = TASK_MAPPING[problem_name](
-        bddl_file_name=args.bddl_file,
-        **config,
-        has_renderer=False,
-        has_offscreen_renderer=True,
-        render_camera="agentview",
-        ignore_done=True,
-        use_camera_obs=False,
-        control_freq=20,
-    )
-
-    env = VisualizationWrapper(env)
-
-    # Define new colors for objects (adjust as needed)
-    new_colors = {
-        "akita_black_bowl_1_g11": [1, 1, 0],  # Yellow
-    }
-
-    # Replay demonstration
-    replay_demonstration(env, args.demo_file, args.output_dir, new_colors)
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--demo_file", type=str, required=True, help="Path to the demonstration HDF5 file")
-    parser.add_argument("--bddl_file", type=str, required=True, help="Path to the BDDL file")
-    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save the output video")
     args = parser.parse_args()
 
-    main(args)
+    # Validate file paths
+    input_hdf5_path = Path(args.input_hdf5)
+    output_hdf5_path = Path(args.output_hdf5)
+    bddl_file = Path(args.bddl_file)
+
+    if not input_hdf5_path.is_file():
+        raise FileNotFoundError(f"Input HDF5 file not found: {args.input_hdf5}")
+    if not bddl_file.is_file():
+        raise FileNotFoundError(f"BDD file not found: {args.bddl_file}")
+
+    # Call the render_new_videos function
+    render_new_videos(
+        input_hdf5_path=str(input_hdf5_path),
+        output_hdf5_path=str(output_hdf5_path),
+        bddl_file=str(bddl_file),
+        camera_names=args.camera_names,
+        camera_height=args.camera_height,
+        camera_width=args.camera_width
+    )
+
+    print(f"Successfully re-rendered videos and saved to {args.output_hdf5}")
+
+if __name__ == "__main__":
+    main()
