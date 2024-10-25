@@ -1,186 +1,415 @@
-import os
 import sys
+sys.path.append('/home/lawrence/ATM')
+
+import argparse
+import os
+from pathlib import Path
+import json
 import h5py
 import numpy as np
-from pathlib import Path
-sys.path.append('/home/lawrence/ATM')
-from libero.envs import OffScreenRenderEnv
-from scripts.hdf5 import print_hdf5_structure
+import robosuite
+from robosuite import load_controller_config
+import robosuite.macros as macros
+import robosuite.utils.transform_utils as T
+import robosuite.utils.camera_utils as camera_utils
+from xml.etree import ElementTree as ET
+import libero.utils.utils as libero_utils
+from libero.envs import TASK_MAPPING
+from libero import get_libero_path
 
-
-def render_new_videos(
-    input_hdf5_path,
-    output_hdf5_path,
-    bddl_file,
-    camera_names=["agentview", "eye_in_hand"],
-    camera_height=128,
-    camera_width=128
-):
+def change_object_colors(model_xml, object_color_mapping):
     """
-    Re-renders the agentview and eye_in_hand videos from an existing HDF5 demonstration file
-    assuming the simulation environment is already configured with modified XML files for object colors.
+    Modify the RGBA colors of specified objects in the Mujoco XML model.
 
     Args:
-        input_hdf5_path (str): Path to the input HDF5 demonstration file.
-        output_hdf5_path (str): Path to save the new HDF5 demonstration file with updated videos.
-        bddl_file (str): Path to the BDDL file defining the task and environment.
-        camera_names (list, optional): List of camera names to render. Defaults to ["agentview", "eye_in_hand"].
-        camera_height (int, optional): Height of the camera images. Defaults to 128.
-        camera_width (int, optional): Width of the camera images. Defaults to 128.
+        model_xml (str): The original XML model as a string.
+        object_color_mapping (dict): Mapping from object names to new RGBA colors.
+
+    Returns:
+        str: The modified XML model as a string.
     """
+    # Parse the XML string
+    xml_tree = ET.ElementTree(ET.fromstring(model_xml))
+    root = xml_tree.getroot()
 
-    # Ensure output directory exists
-    output_parent_dir = Path(output_hdf5_path).parent
-    output_parent_dir.mkdir(parents=True, exist_ok=True)
+    # Iterate over all geom elements
+    for geom in root.findall('.//geom'):
+        geom_name = geom.get('name')
+        if geom_name in object_color_mapping:
+            rgba = object_color_mapping[geom_name]
+            geom.set('rgba', ' '.join(map(str, rgba)))
 
-    # Open the input and output HDF5 files
-    with h5py.File(input_hdf5_path, 'r') as infile, h5py.File(output_hdf5_path, 'w') as outfile:
-        # Function to copy all datasets and groups except video datasets
-        def copy_except_videos(name, obj):
-            if isinstance(obj, h5py.Dataset):
-                # Determine if the dataset is a video dataset
-                if name.endswith('video'):
-                    # Skip video datasets; they will be re-rendered
-                    return
-                else:
-                    # Create the same dataset in the output file
-                    outfile.create_dataset(name, data=obj[()], dtype=obj.dtype)
-            elif isinstance(obj, h5py.Group):
-                # Create the same group in the output file
-                outfile.create_group(name)
+    # Convert back to XML string
+    modified_model_xml = ET.tostring(root, encoding='unicode')
+    return modified_model_xml
 
-        # Copy all datasets and groups except for the 'video' datasets
+def map_bddl_path(original_path, bddl_base_path):
+    """
+    Replace the hard-coded BDDL path prefix with the correct base path.
 
-        infile = infile['root']
-        infile.visititems(copy_except_videos)
+    Args:
+        original_path (str): The original BDDL file path from the demo file.
+        bddl_base_path (str): The correct base path where BDDL files are located.
 
-        # Extract actions and initial state
-        actions = infile['actions'][:]  # Shape: (num_steps, action_dim)
-        ee_states = infile['extra_states/ee_states'][:]  # Shape: (num_steps, 6)
+    Returns:
+        str: The updated BDDL file path.
+    """
+    # Define the prefix to replace
+    # For example, replace 'chiliocosm/bddl_files/' with '/home/lawrence/ATM/libero/bddl_files/'
+    prefix_to_replace = 'chiliocosm/bddl_files/'
 
-        # Assume the initial state corresponds to the first step
-        initial_state = ee_states[0]
+    if original_path.startswith(prefix_to_replace):
+        relative_path = original_path[len(prefix_to_replace):]  # Remove the prefix
+        new_path = os.path.join(bddl_base_path, relative_path)
+        return new_path
+    else:
+        # If the original path does not start with the expected prefix, return as is or handle accordingly
+        print(f"[Warning] Original BDDL path '{original_path}' does not start with '{prefix_to_replace}'. Using original path.")
+        return original_path
 
-        # Initialize the simulation environment
-        env_args = {
-            "bddl_file_name": bddl_file,
-            "camera_heights": camera_height,
-            "camera_widths": camera_width,
+def print_geom_names(model_xml):
+    """
+    Print all geom names in the given Mujoco XML model.
+
+    Args:
+        model_xml (str): The XML model as a string.
+    """
+    xml_tree = ET.ElementTree(ET.fromstring(model_xml))
+    root = xml_tree.getroot()
+    geom_names = [geom.get('name') for geom in root.findall('.//geom')]
+    print("Geom names:", geom_names)
+
+def verify_actions(original_actions, new_actions):
+    """
+    Verify that the original and new actions are identical.
+
+    Args:
+        original_actions (np.ndarray): Actions from the original demo file.
+        new_actions (np.ndarray): Actions from the new demo file.
+
+    Returns:
+        bool: True if actions match, False otherwise.
+    """
+    if original_actions.shape != new_actions.shape:
+        print("[Error] Action shapes do not match.")
+        return False
+    if not np.allclose(original_actions, new_actions):
+        print("[Error] Actions do not match.")
+        return False
+    print("[Success] Actions match between original and new demo files.")
+    return True
+
+def update_mesh_paths(model_xml, mesh_base_path):
+    """
+    Update the mesh file paths in the XML model to point to the correct locations.
+
+    Args:
+        model_xml (str): The original XML model as a string.
+        mesh_base_path (str): The base directory where mesh files are located.
+
+    Returns:
+        str: The updated XML model as a string.
+    """
+    xml_tree = ET.ElementTree(ET.fromstring(model_xml))
+    root = xml_tree.getroot()
+
+    # Iterate over all geom elements
+    for geom in root.findall('.//geom'):
+        mesh_file = geom.get('mesh')
+        if mesh_file:
+            # Extract the mesh filename
+            mesh_filename = os.path.basename(mesh_file)
+            # Construct the new relative or absolute path
+            new_mesh_path = os.path.join(mesh_base_path, mesh_filename)
+            # Update the mesh attribute
+            geom.set('mesh', new_mesh_path)
+            print(f"  Updated mesh path: {mesh_file} -> {new_mesh_path}")
+
+    # Convert back to XML string
+    updated_model_xml = ET.tostring(root, encoding='unicode')
+    return updated_model_xml
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Replay demonstrations with modified object colors.")
+    parser.add_argument('--original-demo-file', type=str, required=True,
+                        help='Path to the original demo file containing multiple demonstrations.')
+    parser.add_argument('--preprocessed-demo-file', type=str, required=True,
+                        help='Path to the preprocessed demo file with one demonstration to reuse metadata.')
+    parser.add_argument('--output-demo-file', type=str, default='new_demos.hdf5',
+                        help='Path to the output demo file to save the new demonstrations.')
+    parser.add_argument('--color-mapping', type=str, default='',
+                        help='Path to a JSON file containing object color mappings. Example format: {"Cube": [1.0, 0.0, 0.0, 1.0]}')
+    parser.add_argument('--bddl-base-path', type=str, required=True,
+                        help='Base path where BDDL files are located on your filesystem (e.g., /home/lawrence/ATM/libero/bddl_files/).')
+    args = parser.parse_args()
+
+    original_demo_file = args.original_demo_file
+    preprocessed_demo_file = args.preprocessed_demo_file
+    output_demo_file = args.output_demo_file
+    bddl_base_path = args.bddl_base_path
+
+    # Validate the BDDL base path
+    if not os.path.isdir(bddl_base_path):
+        print(f"[Error] The specified BDDL base path '{bddl_base_path}' does not exist or is not a directory.")
+        return
+
+    # Define the object color mapping
+    # You can also load this from a JSON file for flexibility
+    if args.color_mapping:
+        with open(args.color_mapping, 'r') as f:
+            object_color_mapping = json.load(f)
+    else:
+        # Default color mapping; modify as needed
+        object_color_mapping = {
+            'akita_black_bowl1': [1.0, 0.0, 0.0, 1.0],      # Red
+            # Add more objects and their colors here
         }
 
-        env = OffScreenRenderEnv(**env_args)
-        env.reset()
+    print("Object Color Mapping:", object_color_mapping)
+    print("BDDLM Base Path:", bddl_base_path)
 
-        """
-        TRYING TO FIGURE OUT HOW TO INITIALIZE ENVIRONMENT STATE FROM HDF5 FILE
-        """
-        env.set_init_state(initial_state)
+    # Open the original and preprocessed demo files
+    with h5py.File(original_demo_file, 'r') as orig_f, \
+         h5py.File(preprocessed_demo_file, 'r') as preproc_f, \
+         h5py.File(output_demo_file, 'w') as new_f:
 
-        # Initialize lists to store video frames
-        agentview_frames = []
-        eye_in_hand_frames = []
+        # Copy global attributes from preprocessed demo file to new file
+        # Assuming global attributes are under 'root'
+        preproc_root = preproc_f['root']
+        new_root = new_f.create_group('root')
 
-        # Iterate through each action and step the environment
-        for idx, action in enumerate(actions):
-            # Perform the action
-            obs, reward, done, info = env.step(action)
+        # Copy attributes
+        for attr_name, attr_value in preproc_root.attrs.items():
+            new_root.attrs[attr_name] = attr_value
+            print(f"Copied global attribute: {attr_name}")
 
-            # Capture images from each camera
-            for cam in camera_names:
-                cam_image_key = f"{cam}_image"
-                if cam_image_key in obs:
-                    frame = obs[cam_image_key]  # e.g., 'agentview_image', 'eye_in_hand_image'
-                    
-                    # Ensure frame shape is (3, height, width) and type uint8
-                    if frame.dtype != np.uint8:
-                        frame = (frame * 255).astype(np.uint8)
-                    
-                    if frame.shape[0] == 3:
-                        # Convert to (height, width, 3)
-                        frame = np.transpose(frame, (1, 2, 0))
-                    elif frame.shape[-1] == 3:
-                        # Already in (height, width, 3)
-                        pass
-                    else:
-                        raise ValueError(f"Unexpected frame shape: {frame.shape}")
-                    
-                    if cam == "agentview":
-                        agentview_frames.append(frame)
-                    elif cam == "eye_in_hand":
-                        eye_in_hand_frames.append(frame)
-            
-            if done:
-                break
+        # Copy global datasets like 'task_emb_bert' if they exist
+        if 'task_emb_bert' in preproc_root:
+            new_root.create_dataset('task_emb_bert', data=preproc_root['task_emb_bert'][:])
+            print("Copied dataset: task_emb_bert")
 
-        # Convert lists to numpy arrays
-        if agentview_frames:
-            agentview_video = np.stack(agentview_frames, axis=0)  # (num_steps, height, width, 3)
-            # Add a new axis to match original HDF5 structure (1, num_steps, 3, height, width)
-            agentview_video = np.transpose(agentview_video, (0, 3, 1, 2))  # (num_steps, 3, height, width)
-            agentview_video = np.expand_dims(agentview_video, axis=0)  # (1, num_steps, 3, height, width)
-        else:
-            print("No frames captured for agentview.")
-            agentview_video = np.empty((1, 0, 3, camera_height, camera_width), dtype=np.uint8)
+        # Load environment information from the original demo file
+        env_name = orig_f['data'].attrs['env_name']
+        env_args = json.loads(orig_f['data'].attrs['env_args'])
+        problem_info = json.loads(orig_f['data'].attrs['problem_info'])
+        problem_name = problem_info["problem_name"]
+        language_instruction = problem_info.get("language_instruction", "")
 
-        if eye_in_hand_frames:
-            eye_in_hand_video = np.stack(eye_in_hand_frames, axis=0)  # (num_steps, height, width, 3)
-            # Add a new axis to match original HDF5 structure (1, num_steps, 3, height, width)
-            eye_in_hand_video = np.transpose(eye_in_hand_video, (0, 3, 1, 2))  # (num_steps, 3, height, width)
-            eye_in_hand_video = np.expand_dims(eye_in_hand_video, axis=0)  # (1, num_steps, 3, height, width)
-        else:
-            print("No frames captured for eye_in_hand.")
-            eye_in_hand_video = np.empty((1, 0, 3, camera_height, camera_width), dtype=np.uint8)
+        print(f"Environment Name: {env_name}")
+        print(f"Problem Name: {problem_name}")
+        print(f"Language Instruction: {language_instruction}")
 
-        # Create the video datasets in the output HDF5 file
-        if 'agentview' not in outfile:
-            outfile.create_group('agentview')
-        outfile['agentview'].create_dataset('video', data=agentview_video, dtype='uint8')
+        # Initialize the environment configuration
+        # controller_config = load_controller_config(default_controller="OSC_POSE")
 
-        if 'eye_in_hand' not in outfile:
-            outfile.create_group('eye_in_hand')
-        outfile['eye_in_hand'].create_dataset('video', data=eye_in_hand_video, dtype='uint8')
+        bddl_file_name = orig_f["data"].attrs["bddl_file_name"]
+        bddl_file_name = '/home/lawrence/ATM/' + '/'.join(bddl_file_name.split('/')[1:])
+
+        # Update environment kwargs
+        libero_utils.update_env_kwargs(
+            env_args['env_kwargs'],
+            bddl_file_name=bddl_file_name,
+            has_renderer=False,
+            has_offscreen_renderer=True,
+            ignore_done=True,
+            use_camera_obs=True,
+            camera_depths=False,  # Set to True if depth is used
+            camera_names=["robot0_eye_in_hand", "agentview"],
+            reward_shaping=True,
+            control_freq=20,
+            camera_heights=128,
+            camera_widths=128,
+            camera_segmentations=None,
+        )
+
+        # Initialize the environment (without resetting it yet)
+        env = TASK_MAPPING[problem_name](
+            **env_args['env_kwargs'],
+        )
+        print("Environment initialized.")
+
+        # Get the list of demonstrations
+        demos = list(orig_f['data'].keys())
+        print(f"Number of demonstrations in original file: {len(demos)}")
+
+        preproc_demo_grp = preproc_f[f'root/']
+        preproc_agentview_grp = preproc_demo_grp['agentview']
+        preproc_eye_in_hand_grp = preproc_demo_grp['eye_in_hand']
+
+        # Extract tracks and vis from preprocessed demo file
+        preproc_agentview_tracks = preproc_agentview_grp['tracks'][:]
+        preproc_agentview_vis = preproc_agentview_grp['vis'][:]
+        preproc_eye_in_hand_tracks = preproc_eye_in_hand_grp['tracks'][:]
+        preproc_eye_in_hand_vis = preproc_eye_in_hand_grp['vis'][:]
+
+        # Extract states from preprocessed demo file's extra_states
+        preproc_extra_states_grp = preproc_demo_grp['extra_states']
+        preproc_extra_states = {}
+        for state_name in preproc_extra_states_grp:
+            preproc_extra_states[state_name] = preproc_extra_states_grp[state_name][:]
+
+        print("Loaded tracks, vis, and extra_states from preprocessed demo file.")
+
+        # Iterate over each demonstration
+        for demo_idx, demo_name in enumerate(demos):
+            print(f"\nProcessing demonstration {demo_idx + 1}/{len(demos)}: {demo_name}")
+
+            # Create a group for this demonstration in the new file
+            demo_group = new_root.create_group(f'demo_{demo_idx}')
+
+            # Copy attributes from original demo
+            orig_demo_grp = orig_f[f'data/{demo_name}']
+            for attr_name, attr_value in orig_demo_grp.attrs.items():
+                # Map the BDDL file path if it's a BDDL file
+                if attr_name == 'bddl_file_name':
+                    original_bddl_path = attr_value
+                    new_bddl_path = map_bddl_path(original_bddl_path, bddl_base_path)
+                    demo_group.attrs[attr_name] = new_bddl_path
+                    print(f"  Mapped BDDL path from '{original_bddl_path}' to '{new_bddl_path}'")
+                else:
+                    demo_group.attrs[attr_name] = attr_value
+                    print(f"  Copied attribute: {attr_name}")
+
+            # Copy and save datasets except for videos
+            # Actions
+            actions = orig_f[f'data/{demo_name}/actions'][:]
+            demo_group.create_dataset('actions', data=actions)
+            print("  Copied dataset: actions")
+
+            # Dones
+            if f'data/{demo_name}/dones' in orig_f:
+                dones = orig_f[f'data/{demo_name}/dones'][:]
+                demo_group.create_dataset('dones', data=dones)
+                print("  Copied dataset: dones")
+
+            # Rewards
+            if f'data/{demo_name}/rewards' in orig_f:
+                rewards = orig_f[f'data/{demo_name}/rewards'][:]
+                demo_group.create_dataset('rewards', data=rewards)
+                print("  Copied dataset: rewards")
+
+            # States
+            states = orig_f[f'data/{demo_name}/states'][:]
+            demo_group.create_dataset('states', data=states)
+            print("  Copied dataset: states")
+
+            # Robot States
+            robot_states = orig_f[f'data/{demo_name}/robot_states'][:]
+            demo_group.create_dataset('robot_states', data=robot_states)
+            print("  Copied dataset: robot_states")
+
+            # Extra States - Copy from preprocessed demo file
+            extra_states_grp = demo_group.create_group('extra_states')
+            for state_name, state_data in preproc_extra_states.items():
+                extra_states_grp.create_dataset(state_name, data=state_data)
+                print(f"  Copied extra_state dataset from preprocessed demo: {state_name}")
+
+            # Agentview
+            agentview_grp = demo_group.create_group('agentview')
+            # Copy tracks and vis from preprocessed demo file
+            agentview_grp.create_dataset('tracks', data=preproc_agentview_tracks)
+            agentview_grp.create_dataset('vis', data=preproc_agentview_vis)
+            print("  Copied datasets: agentview/tracks and agentview/vis from preprocessed demo")
+
+            # Eye in Hand
+            eye_in_hand_grp = demo_group.create_group('eye_in_hand')
+            # Copy tracks and vis from preprocessed demo file
+            eye_in_hand_grp.create_dataset('tracks', data=preproc_eye_in_hand_tracks)
+            eye_in_hand_grp.create_dataset('vis', data=preproc_eye_in_hand_vis)
+            print("  Copied datasets: eye_in_hand/tracks and eye_in_hand/vis from preprocessed demo")
+
+            # Modify the model XML to change object colors
+            original_model_xml = orig_demo_grp.attrs['model_file']
+            # Check if model_file is a path or XML string
+            if original_model_xml.endswith('.bddl'):
+                # Assume it's a path to the BDDL file
+                if os.path.isfile(original_model_xml):
+                    with open(original_model_xml, 'r') as file:
+                        model_xml_content = file.read()
+                else:
+                    print(f"  [Error] BDDL file '{original_model_xml}' not found. Skipping demo {demo_idx + 1}.")
+                    continue
+            else:
+                # Assume it's the XML string
+                model_xml_content = original_model_xml
+
+            # Modify the model XML with new object colors
+            mesh_base_path = '/home/lawrence/ATM/third_party/robosuite/robosuite/models/assets/robots/panda/meshes'
+
+            modified_model_xml = change_object_colors(model_xml_content, object_color_mapping)
+            modified_model_xml = update_mesh_paths(modified_model_xml, mesh_base_path)
+
+            # Reset the environment with the modified model
+            try:
+                env.reset_from_xml_string(modified_model_xml)
+                env.sim.reset()
+                init_state = orig_demo_grp.attrs['init_state']
+                env.sim.set_state_from_flattened(init_state)
+                env.sim.forward()
+                print("  Environment reset with modified model and initial state.")
+            except Exception as e:
+                print(f"  [Error] Failed to reset environment for demo {demo_idx + 1}: {e}")
+                continue  # Skip this demo
+
+            # Initialize lists to store new videos
+            agentview_images = []
+            eye_in_hand_images = []
+
+            # Replay the actions and record new observations
+            for step_idx, action in enumerate(actions):
+                obs, reward, done, info = env.step(action)
+
+                # Record images after the step
+                agentview_image = obs.get('agentview_image', None)
+                eye_in_hand_image = obs.get('robot0_eye_in_hand_image', None)
+
+                if agentview_image is not None:
+                    agentview_images.append(agentview_image)
+                else:
+                    print(f"  [Warning] 'agentview_image' not found at step {step_idx + 1}.")
+
+                if eye_in_hand_image is not None:
+                    eye_in_hand_images.append(eye_in_hand_image)
+                else:
+                    print(f"  [Warning] 'eye_in_hand_image' not found at step {step_idx + 1}.")
+
+                if done:
+                    print(f"  [Info] Demo {demo_idx + 1} terminated at step {step_idx + 1}.")
+                    break  # Proceed to next demo if done
+
+            # Convert image lists to numpy arrays with appropriate shapes
+            if agentview_images:
+                agentview_video = np.stack(agentview_images, axis=0)  # (num_steps, H, W, C)
+                # Rearrange to (1, num_steps, C, H, W)
+                agentview_video = agentview_video.transpose(0, 3, 1, 2)
+                agentview_video = agentview_video[np.newaxis, ...].astype(np.uint8)
+                agentview_grp.create_dataset('video', data=agentview_video)
+                print("  Saved new agentview video.")
+            else:
+                print("  [Warning] No agentview images recorded.")
+
+            if eye_in_hand_images:
+                eye_in_hand_video = np.stack(eye_in_hand_images, axis=0)  # (num_steps, H, W, C)
+                # Rearrange to (1, num_steps, C, H, W)
+                eye_in_hand_video = eye_in_hand_video.transpose(0, 3, 1, 2)
+                eye_in_hand_video = eye_in_hand_video[np.newaxis, ...].astype(np.uint8)
+                eye_in_hand_grp.create_dataset('video', data=eye_in_hand_video)
+                print("  Saved new eye_in_hand video.")
+            else:
+                print("  [Warning] No eye_in_hand images recorded.")
+
+            # Update 'num_samples' attribute based on the number of recorded frames
+            num_samples = len(agentview_images) if agentview_images else 0
+            demo_group.attrs['num_samples'] = num_samples
+            print(f"  Set 'num_samples' to {num_samples}.")
+
+            print(f"  Demonstration {demo_idx + 1} processed successfully.")
+            break
 
         # Close the environment
         env.close()
+        print("\nAll demonstrations have been processed and saved.")
 
-
-# re_render_videos.py
-
-import argparse
-from pathlib import Path
-
-def main():
-    parser = argparse.ArgumentParser(description="Re-render videos in HDF5 demonstration files with updated object colors.")
-    parser.add_argument("--input_hdf5", type=str, required=True, help="Path to the input HDF5 file.")
-    parser.add_argument("--output_hdf5", type=str, required=True, help="Path to save the output HDF5 file with updated videos.")
-    parser.add_argument("--bddl_file", type=str, required=True, help="Path to the BDDL file defining the task and environment.")
-    parser.add_argument("--camera_height", type=int, default=128, help="Height of the camera images.")
-    parser.add_argument("--camera_width", type=int, default=128, help="Width of the camera images.")
-    parser.add_argument("--camera_names", type=str, nargs='+', default=["agentview", "eye_in_hand"], help="Names of the cameras to render.")
-    
-    args = parser.parse_args()
-
-    # Validate file paths
-    input_hdf5_path = Path(args.input_hdf5)
-    output_hdf5_path = Path(args.output_hdf5)
-    bddl_file = Path(args.bddl_file)
-
-    if not input_hdf5_path.is_file():
-        raise FileNotFoundError(f"Input HDF5 file not found: {args.input_hdf5}")
-    if not bddl_file.is_file():
-        raise FileNotFoundError(f"BDD file not found: {args.bddl_file}")
-
-    # Call the render_new_videos function
-    render_new_videos(
-        input_hdf5_path=str(input_hdf5_path),
-        output_hdf5_path=str(output_hdf5_path),
-        bddl_file=str(bddl_file),
-        camera_names=args.camera_names,
-        camera_height=args.camera_height,
-        camera_width=args.camera_width
-    )
-
-    print(f"Successfully re-rendered videos and saved to {args.output_hdf5}")
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
