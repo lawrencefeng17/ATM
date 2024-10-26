@@ -7,12 +7,16 @@ from pathlib import Path
 import json
 import h5py
 import numpy as np
+
 import robosuite
 from robosuite import load_controller_config
 import robosuite.macros as macros
 import robosuite.utils.transform_utils as T
 import robosuite.utils.camera_utils as camera_utils
+
+from xml.dom import minidom
 from xml.etree import ElementTree as ET
+
 import libero.utils.utils as libero_utils
 from libero.envs import TASK_MAPPING
 from libero import get_libero_path
@@ -99,36 +103,71 @@ def verify_actions(original_actions, new_actions):
     print("[Success] Actions match between original and new demo files.")
     return True
 
-def update_mesh_paths(model_xml, mesh_base_path):
+
+def pretty_print_xml(xml_string):
     """
-    Update the mesh file paths in the XML model to point to the correct locations.
+    Pretty prints an XML string with indentation for readability.
 
     Args:
-        model_xml (str): The original XML model as a string.
-        mesh_base_path (str): The base directory where mesh files are located.
-
+        xml_string (str): The XML string to be formatted and printed.
+    
     Returns:
-        str: The updated XML model as a string.
+        str: The formatted XML string with indentation.
     """
-    xml_tree = ET.ElementTree(ET.fromstring(model_xml))
-    root = xml_tree.getroot()
+    # Parse the XML string into an ElementTree element
+    xml_element = ET.fromstring(xml_string)
+    
+    # Convert the element to a string with encoding
+    raw_xml = ET.tostring(xml_element, 'utf-8')
+    
+    # Use minidom to parse and pretty print
+    parsed_xml = minidom.parseString(raw_xml)
+    pretty_xml = parsed_xml.toprettyxml(indent="  ")
+    
+    # Print the pretty XML
+    print(pretty_xml)
+    
+    # Return the pretty XML string
+    return pretty_xml
 
-    # Iterate over all geom elements
-    for geom in root.findall('.//geom'):
-        mesh_file = geom.get('mesh')
-        if mesh_file:
-            # Extract the mesh filename
-            mesh_filename = os.path.basename(mesh_file)
-            # Construct the new relative or absolute path
-            new_mesh_path = os.path.join(mesh_base_path, mesh_filename)
-            # Update the mesh attribute
-            geom.set('mesh', new_mesh_path)
-            print(f"  Updated mesh path: {mesh_file} -> {new_mesh_path}")
+def fix_mujoco_paths(xml_content, replacements):
+    """
+    Fix file paths in MuJoCo XML content.
+    
+    Args:
+        xml_content (str): Original XML content
+        replacements (dict): Dictionary of path replacements
+    
+    Returns:
+        str: Modified XML content
+    """
+    # Parse the XML
+    root = ET.fromstring(xml_content)
+    
+    # Find all elements with 'file' attribute
+    for elem in root.findall(".//*[@file]"):
+        file_path = elem.get('file')
+        
+        # Apply replacements
+        new_path = file_path
+        for old_path, new_path_base in replacements.items():
+            if old_path in file_path:
+                # Replace the base path while keeping the relative path
+                relative_path = file_path[len(old_path):]
+                new_path = new_path_base + relative_path
+                break
+                
+        # Update the file attribute
+        elem.set('file', new_path)
+    
+    # Convert back to string
+    return ET.tostring(root, encoding='unicode')
 
-    # Convert back to XML string
-    updated_model_xml = ET.tostring(root, encoding='unicode')
-    return updated_model_xml
-
+# Define the path replacements
+path_replacements = {
+    "/Users/yifengz/workspace/libero-dev/chiliocosm/assets/": "/home/lawrence/ATM/libero/assets/",
+    "/Users/yifengz/workspace/robosuite-master/robosuite/models/assets/": "/home/lawrence/ATM/third_party/robosuite/robosuite/models/assets/"
+}
 
 def main():
     parser = argparse.ArgumentParser(description="Replay demonstrations with modified object colors.")
@@ -162,7 +201,9 @@ def main():
     else:
         # Default color mapping; modify as needed
         object_color_mapping = {
-            'akita_black_bowl1': [1.0, 0.0, 0.0, 1.0],      # Red
+            'akita_black_bowl': [1.0, 0.0, 0.0, 1.0],      # Red
+            'plate:': [0.0, 1.0, 0.0, 1.0],                   # Green
+            'glazed_rim_porcelain_ramekin': [0.0, 0.0, 1.0, 1.0],  # Blue
             # Add more objects and their colors here
         }
 
@@ -252,6 +293,8 @@ def main():
         print("Loaded tracks, vis, and extra_states from preprocessed demo file.")
 
         # Iterate over each demonstration
+
+        demos = demos[:1]
         for demo_idx, demo_name in enumerate(demos):
             print(f"\nProcessing demonstration {demo_idx + 1}/{len(demos)}: {demo_name}")
 
@@ -334,11 +377,11 @@ def main():
                 # Assume it's the XML string
                 model_xml_content = original_model_xml
 
-            # Modify the model XML with new object colors
-            mesh_base_path = '/home/lawrence/ATM/third_party/robosuite/robosuite/models/assets/robots/panda/meshes'
-
             modified_model_xml = change_object_colors(model_xml_content, object_color_mapping)
-            modified_model_xml = update_mesh_paths(modified_model_xml, mesh_base_path)
+
+            # Fix paths in the modified model XML
+            modified_model_xml = fix_mujoco_paths(modified_model_xml, path_replacements)
+            # pretty_print_xml(modified_model_xml)
 
             # Reset the environment with the modified model
             try:
@@ -405,7 +448,6 @@ def main():
             print(f"  Set 'num_samples' to {num_samples}.")
 
             print(f"  Demonstration {demo_idx + 1} processed successfully.")
-            break
 
         # Close the environment
         env.close()
