@@ -21,13 +21,13 @@ import libero.utils.utils as libero_utils
 from libero.envs import TASK_MAPPING
 from libero import get_libero_path
 
-def change_object_colors(model_xml, object_color_mapping):
+def change_object_colors(model_xml, object_color_mapping, logging=False):
     """
-    Modify the RGBA colors of specified objects in the Mujoco XML model.
+    Modify the RGBA colors of specified objects in the Mujoco XML model using substring matching.
 
     Args:
         model_xml (str): The original XML model as a string.
-        object_color_mapping (dict): Mapping from object names to new RGBA colors.
+        object_color_mapping (dict): Mapping from base object names to new RGBA colors.
 
     Returns:
         str: The modified XML model as a string.
@@ -36,12 +36,32 @@ def change_object_colors(model_xml, object_color_mapping):
     xml_tree = ET.ElementTree(ET.fromstring(model_xml))
     root = xml_tree.getroot()
 
+    # Track modified geoms
+    modified_geoms = {}
+
     # Iterate over all geom elements
     for geom in root.findall('.//geom'):
         geom_name = geom.get('name')
-        if geom_name in object_color_mapping:
-            rgba = object_color_mapping[geom_name]
-            geom.set('rgba', ' '.join(map(str, rgba)))
+        # Check if any key in object_color_mapping is a substring of geom_name
+        for base_name, rgba in object_color_mapping.items():
+            if base_name in geom_name:
+                original_rgba = geom.get('rgba')
+                geom.set('rgba', ' '.join(map(str, rgba)))
+                if base_name not in modified_geoms:
+                    modified_geoms[base_name] = []
+                modified_geoms[base_name].append((geom_name, original_rgba, geom.get('rgba')))
+                break  # Assuming one color mapping per geom
+
+    if logging:
+        # Logging the modifications
+        if modified_geoms:
+            print(f"  [Info] Modified {sum(len(v) for v in modified_geoms.values())} geoms:")
+            for base_name, geoms in modified_geoms.items():
+                print(f"    - Base Object: {base_name}")
+                for geom_name, orig, new in geoms:
+                    print(f"        * {geom_name}: {orig} -> {new}")
+        else:
+            print("  [Warning] No geoms matched the object color mapping. Check object names.")
 
     # Convert back to XML string
     modified_model_xml = ET.tostring(root, encoding='unicode')
@@ -201,9 +221,9 @@ def main():
     else:
         # Default color mapping; modify as needed
         object_color_mapping = {
-            'akita_black_bowl': [1.0, 0.0, 0.0, 1.0],      # Red
-            'plate:': [0.0, 1.0, 0.0, 1.0],                   # Green
-            'glazed_rim_porcelain_ramekin': [0.0, 0.0, 1.0, 1.0],  # Blue
+            'akita_black_bowl': [1.0, 0.0, 0.0, 1.0],      
+            'plate': [1.0, 0.0, 0.0, 1.0],                 
+            'glazed_rim_porcelain_ramekin': [1.0, 0.0, 0.0, 0.0],
             # Add more objects and their colors here
         }
 
@@ -482,6 +502,18 @@ def main():
                     env.close()
 
     print("\nAll demonstrations have been processed and saved.")
+
+def print_geom_names(model_xml):
+    """
+    Print all geom names in the given Mujoco XML model.
+
+    Args:
+        model_xml (str): The XML model as a string.
+    """
+    xml_tree = ET.ElementTree(ET.fromstring(model_xml))
+    root = xml_tree.getroot()
+    geom_names = [geom.get('name') for geom in root.findall('.//geom')]
+    print("Geom names:", geom_names)
 
 if __name__ == '__main__':
     main()

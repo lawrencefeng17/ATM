@@ -6,7 +6,7 @@ import argparse
 # --output-demos-folder /home/lawrence/ATM/data/atm_libero/colored/test/ 
 # --bddl-base-path  /home/lawrence/ATM/libero/bddl_files/
 
-output_demos_folder = "/home/lawrence/ATM/data/atm_libero/colored/libero_spatial"
+output_demos_folder = "/home/lawrence/ATM/data/atm_libero/colored/libero_spatial_red/"
 bddl_base_path = "/home/lawrence/ATM/libero/bddl_files/"
 original = "/home/lawrence/ATM/data/libero_spatial"
 preprocessed = "/home/lawrence/ATM/data/atm_libero/libero_spatial"
