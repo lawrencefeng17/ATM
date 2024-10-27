@@ -69,7 +69,8 @@ def main():
     file = args.f
 
     demo = load_h5(file)
-    array_to_video(demo['root']['demo_0']['agentview']['video'])
+    array_to_video(demo['root']['agentview']['video'], "demo_agentview_0.mp4")
+    array_to_video(demo['root']['eye_in_hand']['video'], "demo_eye_in_hand_0.mp4")
 
 if __name__ == "__main__":
     main()
