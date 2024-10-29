@@ -93,12 +93,16 @@ class BaseDataset(Dataset):
                 self.views.remove("actions")
                 self.views.remove("task_emb_bert")
                 self.views.remove("extra_states")
+                self.views.remove("rewards")
+                self.views.remove("robot_states")
+                self.views.remove("states")
                 self.views.sort()
 
+            breakpoint()
+            print(self.views)
             demo_len = demo["root"][self.views[0]]["video"][0].shape[0]
 
             if self.cache_all:
-                breakpoint()
                 demo = self.process_demo(demo)
                 if not self.cache_image:
                     for v in self.views:

@@ -221,9 +221,9 @@ def main():
     else:
         # Default color mapping; modify as needed
         object_color_mapping = {
-            'akita_black_bowl': [1.0, 0.0, 0.0, 1.0],      
-            'plate': [1.0, 0.0, 0.0, 1.0],                 
-            'glazed_rim_porcelain_ramekin': [1.0, 0.0, 0.0, 0.0],
+            'akita_black_bowl': [0.0, 0.0, 1.0, 1.0],      
+            'plate': [0.0, 0.0, 1.0, 1.0],                 
+            'glazed_rim_porcelain_ramekin': [0.0, 0.0, 1.0, 0.0],
             # Add more objects and their colors here
         }
 

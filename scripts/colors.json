@@ -1,4 +1,5 @@
 {
-    "cube": [1, 0, 0, 1], 
-    "target": [0, 1, 0, 1]
+	"akita_black_bowl": [0.0, 1.0, 0.0, 1.0],
+	"plate": [0.0, 1.0, 0.0, 1.0],
+	"glazed_rim_porcrlain_ramekin": [0.0, 1.0, 0.0, 0.0]
 }
