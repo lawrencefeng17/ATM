@@ -152,31 +152,31 @@ class TrackTransformer(nn.Module):
 
         return patches
 
-    def cosine_similarity(tensor1, tensor2):
-        tensor1 = tensor1.flatten(start_dim=1)
-        tensor2 = tensor2.flatten(start_dim=1)
-        return F.cosine_similarity(tensor1, tensor2, dim=1)
+    # def cosine_similarity(tensor1, tensor2):
+    #     tensor1 = tensor1.flatten(start_dim=1)
+    #     tensor2 = tensor2.flatten(start_dim=1)
+    #     return F.cosine_similarity(tensor1, tensor2, dim=1)
 
-    def get_frame_cosine_similarity(self, vid, p, frame1_idx, frame2_idx):
-        """
-        Calculate the cosine similarity between two frames in a video.
+    # def get_frame_cosine_similarity(self, vid, p, frame1_idx, frame2_idx):
+    #     """
+    #     Calculate the cosine similarity between two frames in a video.
         
-        vid: (b, t, c, h, w)
-        p: probability for masking patches
-        frame1_idx: index of the first frame
-        frame2_idx: index of the second frame
-        """
-        # Encode the video
-        encoded_vid = self._encode_video(vid, p)
+    #     vid: (b, t, c, h, w)
+    #     p: probability for masking patches
+    #     frame1_idx: index of the first frame
+    #     frame2_idx: index of the second frame
+    #     """
+    #     # Encode the video
+    #     encoded_vid = self._encode_video(vid, p)
         
-        # Extract the patches for the two frames
-        frame1_patches = encoded_vid[:, frame1_idx, :]
-        frame2_patches = encoded_vid[:, frame2_idx, :]
+    #     # Extract the patches for the two frames
+    #     frame1_patches = encoded_vid[:, frame1_idx, :]
+    #     frame2_patches = encoded_vid[:, frame2_idx, :]
         
-        # Calculate cosine similarity
-        similarity = cosine_similarity(frame1_patches, frame2_patches)
+    #     # Calculate cosine similarity
+    #     similarity = cosine_similarity(frame1_patches, frame2_patches)
     
-        return similarity
+    #     return similarity
 
     def _mask_patches(self, patches, p):
         """

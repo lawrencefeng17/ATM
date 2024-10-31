@@ -25,3 +25,4 @@ for task in os.listdir(preprocessed):
                f"--bddl-base-path {bddl_base_path} "
                f"--color-mapping {args.color_mapping}")
     
+# python replay_spatial.py --output-demos-folder /home/lawrence/ATM/data/atm_libero/colored/ --color_mapping /home/lawrence/ATM/scripts/

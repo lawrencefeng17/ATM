@@ -32,13 +32,20 @@ class BCViLTPolicy(nn.Module):
 
     def __init__(self, obs_cfg, img_encoder_cfg, language_encoder_cfg, extra_state_encoder_cfg, track_cfg,
                  spatial_transformer_cfg, temporal_transformer_cfg,
-                 policy_head_cfg, load_path=None):
+                 policy_head_cfg, load_path=None, spatial_transformer_use_track_text_only=False):
         super().__init__()
+        self.spatial_transformer_use_track_text_only = spatial_transformer_use_track_text_only
 
         self._process_obs_shapes(**obs_cfg)
 
         # 1. encode image
-        self._setup_image_encoder(**img_encoder_cfg)
+        if not self.spatial_transformer_use_track_text_only:
+            self._setup_image_encoder(**img_encoder_cfg)
+        else:
+            self.spatial_embed_size = img_encoder_cfg.get("embed_size", 768)
+            self.image_encoders = None  # Disable image encoders
+            self.img_num_patches = 0  # No image patches
+
 
         # 2. encode language (spatial)
         self.language_encoder_spatial = self._setup_language_encoder(output_size=self.spatial_embed_size, **language_encoder_cfg)
@@ -135,9 +142,14 @@ class BCViLTPolicy(nn.Module):
         spatial_token = nn.Parameter(torch.randn(1, 1, self.spatial_embed_size))  # SPATIAL_TOKEN
         img_patch_pos_embed = nn.Parameter(torch.randn(1, self.img_num_patches, self.spatial_embed_size))
         track_patch_pos_embed = nn.Parameter(torch.randn(1, self.num_track_patches, self.spatial_embed_size-self.track_id_embed_dim))
-        modality_embed = nn.Parameter(
-            torch.randn(1, len(self.image_encoders) + self.num_views + 1, self.spatial_embed_size)
-        )  # IMG_PATCH_TOKENS + TRACK_PATCH_TOKENS + SENTENCE_TOKEN
+        if self.spatial_transformer_use_track_text_only:
+            modality_embed = nn.Parameter(
+                torch.randn(1, self.num_views + 1, self.spatial_embed_size)
+            )
+        else: 
+            modality_embed = nn.Parameter(
+                torch.randn(1, len(self.image_encoders) + self.num_views + 1, self.spatial_embed_size)
+            )  # IMG_PATCH_TOKENS + TRACK_PATCH_TOKENS + SENTENCE_TOKEN
 
         self.register_parameter("spatial_token", spatial_token)
         self.register_parameter("img_patch_pos_embed", img_patch_pos_embed)
@@ -146,11 +158,14 @@ class BCViLTPolicy(nn.Module):
 
         # for selecting modality embed
         modality_idx = []
-        for i, encoder in enumerate(self.image_encoders):
-            modality_idx += [i] * encoder.num_patches
+        if self.image_encoders is not None:
+            for i, encoder in enumerate(self.image_encoders):
+                modality_idx += [i] * encoder.num_patches
+        
+        track_modality_start = len(self.image_encoders) if self.image_encoders is not None else 0
         for i in range(self.num_views):
-            modality_idx += [modality_idx[-1] + 1] * self.num_track_ids * self.num_track_patches_per_view  # for track embedding
-        modality_idx += [modality_idx[-1] + 1]  # for sentence embedding
+            modality_idx += [track_modality_start + i] * self.num_track_ids * self.num_track_patches_per_view  # for track embedding
+        modality_idx += [track_modality_start + self.num_views]  # for sentence embedding
         self.modality_idx = torch.LongTensor(modality_idx)
 
     def _setup_extra_state_encoder(self, **extra_state_encoder_cfg):
@@ -201,7 +216,6 @@ class BCViLTPolicy(nn.Module):
         self.register_parameter("action_cls_token", action_cls_token)
 
     def _setup_policy_head(self, network_name, **policy_head_kwargs):
-        # breakpoint()
         policy_head_kwargs["input_size"] \
             = self.temporal_embed_size + self.num_views * self.policy_num_track_ts * self.policy_num_track_ids * 2
 
@@ -289,20 +303,23 @@ class BCViLTPolicy(nn.Module):
         """
         # breakpoint()
         # 1. encode image
-        img_encoded = []
-        for view_idx in range(self.num_views): # wrist view and third-person view
-            img_encoded.append(
-                rearrange(
-                    TensorUtils.time_distributed(
-                        obs[:, view_idx, ...], self.image_encoders[view_idx] # apply corresponding image encoder to view
-                    ),
-                    "b t c h w -> b t (h w) c",
-                )
-            )  # (b, t, num_patches, c)
+        if not self.spatial_transformer_use_track_text_only:
+            img_encoded = []
+            for view_idx in range(self.num_views): # wrist view and third-person view
+                img_encoded.append(
+                    rearrange(
+                        TensorUtils.time_distributed(
+                            obs[:, view_idx, ...], self.image_encoders[view_idx] # apply corresponding image encoder to view
+                        ),
+                        "b t c h w -> b t (h w) c",
+                    )
+                )  # (b, t, num_patches, c)
 
-        img_encoded = torch.cat(img_encoded, -2)  # (b, t, 2*num_patches, c) by concatenating the two views along the spatial axis
-        img_encoded += self.img_patch_pos_embed.unsqueeze(0)  # (b, t, 2*num_patches, c)
-        B, T = img_encoded.shape[:2]
+            img_encoded = torch.cat(img_encoded, -2)  # (b, t, 2*num_patches, c) by concatenating the two views along the spatial axis
+            img_encoded += self.img_patch_pos_embed.unsqueeze(0)  # (b, t, 2*num_patches, c)
+        else: 
+            img_encoded = None
+        B, T = obs.shape[:2]
 
         # 2. encode task_emb
         text_encoded = self.language_encoder_spatial(task_emb)  # (b, c)
@@ -320,12 +337,28 @@ class BCViLTPolicy(nn.Module):
 
         # 3. concat img + track + text embs then add modality embeddings
         if self.spatial_transformer_use_text:
-            img_track_text_encoded = torch.cat([img_encoded, track_encoded, text_encoded], -2)  # (b, t, 2*num_img_patch + 2*num_track*num_track_patch + 1, c)
-            img_track_text_encoded += self.modality_embed[None, :, self.modality_idx, :]
+            if img_encoded is not None:
+                img_track_text_encoded = torch.cat([img_encoded, track_encoded, text_encoded], -2)  # (b, t, img_patches + track_patches + 1, c)
+                modality_length = self.modality_idx.size(0)
+                modality_idx = self.modality_idx.clone()
+            else:
+                img_track_text_encoded = torch.cat([track_encoded, text_encoded], -2)  # (b, t, track_patches + 1, c)
+                # Adjust modality_idx by removing image patch indices
+                modality_idx = self.modality_idx.clone()
+                modality_idx = modality_idx[-(self.num_views * self.num_track_patches_per_view * self.num_track_ids + 1):]
+            img_track_text_encoded += self.modality_embed[None, :, modality_idx, :]
         else:
-            img_track_text_encoded = torch.cat([img_encoded, track_encoded], -2)  # (b, t, 2*num_img_patch + 2*num_track*num_track_patch, c)
-            img_track_text_encoded += self.modality_embed[None, :, self.modality_idx[:-1], :]
-
+            if img_encoded is not None:
+                img_track_text_encoded = torch.cat([img_encoded, track_encoded], -2)  # (b, t, img_patches + track_patches, c)
+                modality_length = self.modality_idx.size(0) - 1  # Exclude sentence token
+                modality_idx = self.modality_idx[:-1].clone()
+            else:
+                img_track_text_encoded = track_encoded  # (b, t, track_patches, c) 
+                # Adjust modality_idx by removing image patch indices and sentence token 
+                modality_idx = self.modality_idx.clone() 
+                modality_idx = modality_idx[-(self.num_views * self.num_track_patches_per_view * self.num_track_ids):]
+            img_track_text_encoded += self.modality_embed[None, :, modality_idx, :]        
+            
         # 4. add spatial token
         spatial_token = self.spatial_token.unsqueeze(0).expand(B, T, -1, -1)  # (b, t, 1, c)
         encoded = torch.cat([spatial_token, img_track_text_encoded], -2)  # (b, t, 2*num_img_patch + 2*num_track*num_track_patch + 2, c)
@@ -499,14 +532,16 @@ class BCViLTPolicy(nn.Module):
         obs = self._preprocess_rgb(obs)
 
         with torch.no_grad():
-            x, rec_tracks = self.spatial_encode(obs, track_obs, task_emb=task_emb, extra_states=extra_states, return_recon=True)  # x: (b, 1, 4, c), recon_track: (b, v, 1, tl, n, 2)
+            x, rec_tracks = self.spatial_encode(obs, track_obs, task_emb=task_emb, extra_states=extra_states, return_recon=True)  # x: (b, t, 2+num_extra, c), recon_track: (b, v, t, tl, n, 2)
             self.latent_queue.append(x)
-            x = torch.cat(list(self.latent_queue), dim=1)  # (b, t, 4, c)
+            x = torch.cat(list(self.latent_queue), dim=1)  # (b, t, 2+num_extra, c)
             x = self.temporal_encode(x)  # (b, t, c)
 
-            feat = torch.cat([x[:, -1], rearrange(rec_tracks[:, :, -1, :, :, :], "b v tl n d -> b (v tl n d)")], dim=-1)
+            recon_track = rearrange(rec_tracks, "b v t tl n d -> b t (v tl n d)")
+            x = torch.cat([x, recon_track], dim=-1)  # (b, t, c + v*tl*n*2)
 
-            action = self.policy_head.get_action(feat)  # only use the current timestep feature to predict action
+            dist = self.policy_head(x)  # only use the current timestep feature to predict action
+            action = self.policy_head.get_action(x)  # only use the current timestep feature to predict action
             action = action.detach().cpu()  # (b, act_dim)
 
         action = action.reshape(-1, *self.act_shape)
