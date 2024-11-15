@@ -65,7 +65,6 @@ scheduler_cfg:
 
 model_name: BCViLTPolicy
 model_cfg:
-  spatial_transformer_use_track_text_only: true
   load_path: null
   obs_cfg:
     obs_shapes:
