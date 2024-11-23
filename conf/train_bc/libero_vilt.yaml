@@ -27,7 +27,7 @@ save_freq: 5
 clip_grad: 100.
 epochs: 101
 seed: 0
-dry: true
+dry: false
 
 img_size: 128
 frame_stack: 10
@@ -66,6 +66,7 @@ scheduler_cfg:
 model_name: BCViLTPolicy
 model_cfg:
   load_path: null
+  spatial_transformer_use_track_text_only: true
   obs_cfg:
     obs_shapes:
       rgb: [3, 128, 128]

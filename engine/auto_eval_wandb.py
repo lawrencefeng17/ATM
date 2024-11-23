@@ -11,6 +11,7 @@ from lightning.fabric import Fabric
 
 from atm.utils.train_utils import pretty_print_cfg
 
+
 class CheckpointEvaluator:
     def __init__(self, cfg, fabric, wandb_run, checkpoint_dir):
         self.cfg = cfg
@@ -122,7 +123,9 @@ def main():
     # Initialize wandb
     api = wandb.Api()
     project = "atm_policy"
-    run = api.run(f"11485-26/{project}/{args.wandb_run_id}")
+    # run = api.run(f"11485-26/{project}/{args.wandb_run_id}")
+    entity = "iam-lab"
+    run = api.run(f"{entity}/{project}/{args.wandb_run_id}")
 
     cfg = get_wandb_config(run)
 
@@ -130,7 +133,7 @@ def main():
     wandb_run = wandb.init(
         id=args.wandb_run_id,
         project=cfg.wandb.project,
-        entity="11485-26",
+        entity=entity,
         resume="must",
     )
 
