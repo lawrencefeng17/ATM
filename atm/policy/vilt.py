@@ -514,44 +514,53 @@ class BCViLTPolicy(nn.Module):
                 all_ret_dict[k] = np.mean(v)
         return None, all_ret_dict
 
-    def act(self, track_obs, task_emb, extra_states):
+    def act(self, obs, task_emb, extra_states):
         """
         Args:
-            track_obs: (b, v, tt_fs, c, h, w)
+            obs: (b, v, h, w, c)
             task_emb: (b, em_dim)
             extra_states: {k: (b, state_dim,)}
         """
         self.eval()
-        B = track_obs.shape[0]
+        B = obs.shape[0]
+
+        # expand time dimenstion
+        obs = rearrange(obs, "b v h w c -> b v 1 c h w").copy()
+        extra_states = {k: rearrange(v, "b e -> b 1 e") for k, v in extra_states.items()}
 
         dtype = next(self.parameters()).dtype
         device = next(self.parameters()).device
-        track_obs = torch.Tensor(track_obs).to(device=device, dtype=dtype)
+        obs = torch.Tensor(obs).to(device=device, dtype=dtype)
         task_emb = torch.Tensor(task_emb).to(device=device, dtype=dtype)
         extra_states = {k: torch.Tensor(v).to(device=device, dtype=dtype) for k, v in extra_states.items()}
 
-        # Handle the resizing of track observations if necessary
-        # Assuming track_obs is already in the correct shape
+        if (obs.shape[-2] != self.obs_shapes["rgb"][-2]) or (obs.shape[-1] != self.obs_shapes["rgb"][-1]):
+            obs = rearrange(obs, "b v fs c h w -> (b v fs) c h w")
+            obs = F.interpolate(obs, size=self.obs_shapes["rgb"][-2:], mode="bilinear", align_corners=False)
+            obs = rearrange(obs, "(b v fs) c h w -> b v fs c h w", b=B, v=self.num_views)
+
         while len(self.track_obs_queue) < self.max_seq_len:
-            self.track_obs_queue.append(torch.zeros_like(track_obs))
-        self.track_obs_queue.append(track_obs.clone())
-        track_obs_seq = torch.cat(list(self.track_obs_queue), dim=2)  # b v tt_fs c h w
-        track_obs_seq = rearrange(track_obs_seq, "b v tt_fs c h w -> b v 1 tt_fs c h w")
+            self.track_obs_queue.append(torch.zeros_like(obs))
+        self.track_obs_queue.append(obs.clone())
+        track_obs = torch.cat(list(self.track_obs_queue), dim=2)  # b v fs c h w
+        track_obs = rearrange(track_obs, "b v fs c h w -> b v 1 fs c h w")
+
+        obs = self._preprocess_rgb(obs)
 
         with torch.no_grad():
-            x, rec_tracks = self.spatial_encode(None, track_obs_seq, task_emb=task_emb, extra_states=extra_states, return_recon=True)  # x: (b, 1, num_modalities, c)
+            x, rec_tracks = self.spatial_encode(obs, track_obs, task_emb=task_emb, extra_states=extra_states, return_recon=True)  # x: (b, 1, 4, c), recon_track: (b, v, 1, tl, n, 2)
             self.latent_queue.append(x)
-            x = torch.cat(list(self.latent_queue), dim=1)  # (b, t, num_modalities, c)
+            x = torch.cat(list(self.latent_queue), dim=1)  # (b, t, 4, c)
             x = self.temporal_encode(x)  # (b, t, c)
 
             feat = torch.cat([x[:, -1], rearrange(rec_tracks[:, :, -1, :, :, :], "b v tl n d -> b (v tl n d)")], dim=-1)
 
-            action = self.policy_head.get_action(feat)  # (b, act_dim)
+            action = self.policy_head.get_action(feat)  # only use the current timestep feature to predict action
             action = action.detach().cpu()  # (b, act_dim)
 
         action = action.reshape(-1, *self.act_shape)
         action = torch.clamp(action, -1, 1)
-        return action.float().cpu().numpy()
+        return action.float().cpu().numpy(), (None, rec_tracks[:, :, -1, :, :, :])  # (b, *act_shape)
 
     def reset(self):
         self.latent_queue.clear()
