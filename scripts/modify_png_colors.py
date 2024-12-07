@@ -71,6 +71,8 @@ if __name__ == "__main__":
         with open(color_mapping, 'r') as f:
             data = json.load(f)
             for obj, color in data.items():
+                if color is None:
+                    continue
                 # Add new texture png 
                 image_path = Path(assets_path) / obj / "texture.png"
                 new_color = color
