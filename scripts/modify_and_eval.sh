@@ -5,6 +5,8 @@
 COLOR=""
 POLICY=""
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 while getopts "c:p:" opt; do
     case $opt in
         c)
@@ -24,14 +26,14 @@ while getopts "c:p:" opt; do
 done
 
 # Modify the input file
-python ~/ATM/scripts/modify_png_colors.py --color-mapping $COLOR
+python "$SCRIPT_DIR/modify_png_colors.py" --color-mapping "$COLOR"
 
 if [ $? -ne 0 ]; then
     echo "Script1 failed. Exiting."
     exit 1
 fi
 
-python ~/ATM/scripts/modified_eval.py -f $COLOR --policy $POLICY
+python "$SCRIPT_DIR/modified_eval.py" -f "$COLOR" --policy "$POLICY"
 
 if [ $? -ne 0 ]; then
     echo "Script2 failed. Exiting."
