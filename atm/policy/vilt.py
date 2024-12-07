@@ -32,14 +32,14 @@ class BCViLTPolicy(nn.Module):
 
     def __init__(self, obs_cfg, img_encoder_cfg, language_encoder_cfg, extra_state_encoder_cfg, track_cfg,
                  spatial_transformer_cfg, temporal_transformer_cfg,
-                 policy_head_cfg, load_path=None, spatial_transformer_use_track_text_only=False):
+                 policy_head_cfg, load_path=None, spatial_transformer_use_track_only=False):
         super().__init__()
-        self.spatial_transformer_use_track_text_only = spatial_transformer_use_track_text_only
+        self.spatial_transformer_use_track_only = spatial_transformer_use_track_only
 
         self._process_obs_shapes(**obs_cfg)
 
         # 1. encode image
-        if not self.spatial_transformer_use_track_text_only:
+        if not self.spatial_transformer_use_track_only:
             self._setup_image_encoder(**img_encoder_cfg)
         else:
             self.spatial_embed_size = img_encoder_cfg['embed_size']
@@ -137,10 +137,10 @@ class BCViLTPolicy(nn.Module):
     def _setup_spatial_positional_embeddings(self):
         # setup positional embeddings
         spatial_token = nn.Parameter(torch.randn(1, 1, self.spatial_embed_size))  # SPATIAL_TOKEN
-        if not self.spatial_transformer_use_track_text_only:
+        if not self.spatial_transformer_use_track_only:
             img_patch_pos_embed = nn.Parameter(torch.randn(1, self.img_num_patches, self.spatial_embed_size))
         track_patch_pos_embed = nn.Parameter(torch.randn(1, self.num_track_patches, self.spatial_embed_size-self.track_id_embed_dim))
-        if self.spatial_transformer_use_track_text_only:
+        if self.spatial_transformer_use_track_only:
             modality_embed = nn.Parameter(
                 torch.randn(1, self.num_views + 1, self.spatial_embed_size)
             )
@@ -153,19 +153,19 @@ class BCViLTPolicy(nn.Module):
         # )  # TRACK_PATCH_TOKENS + SENTENCE_TOKEN
 
         self.register_parameter("spatial_token", spatial_token)
-        if not self.spatial_transformer_use_track_text_only:
+        if not self.spatial_transformer_use_track_only:
             self.register_parameter("img_patch_pos_embed", img_patch_pos_embed)
         self.register_parameter("track_patch_pos_embed", track_patch_pos_embed)
         self.register_parameter("modality_embed", modality_embed)
 
         # for selecting modality embed
         modality_idx = []
-        if not self.spatial_transformer_use_track_text_only:
+        if not self.spatial_transformer_use_track_only:
             for i, encoder in enumerate(self.image_encoders):
                 modality_idx.extend([i] * encoder.num_patches)
 
         current_modality_index = (
-            0 if self.spatial_transformer_use_track_text_only else modality_idx[-1] + 1
+            0 if self.spatial_transformer_use_track_only else modality_idx[-1] + 1
         )
         for i in range(self.num_views):
             modality_idx += [current_modality_index] * self.num_track_ids * self.num_track_patches_per_view  # for track embedding
@@ -319,7 +319,7 @@ class BCViLTPolicy(nn.Module):
         """
         # breakpoint()
         # 1. encode image
-        if not self.spatial_transformer_use_track_text_only:
+        if not self.spatial_transformer_use_track_only:
             img_encoded = []
             for view_idx in range(self.num_views): # wrist view and third-person view
                 img_encoded.append(

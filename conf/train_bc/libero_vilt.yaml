@@ -66,7 +66,7 @@ scheduler_cfg:
 model_name: BCViLTPolicy
 model_cfg:
   load_path: null
-  spatial_transformer_use_track_text_only: true
+  spatial_transformer_use_track_only: true
   obs_cfg:
     obs_shapes:
       rgb: [3, 128, 128]

@@ -22,7 +22,7 @@ lr: 1e-4
 batch_size: 256
 mix_precision: true
 num_workers: 8
-val_freq: 1
+val_freq: 10
 save_freq: 10
 clip_grad: 10.
 epochs: 1001
