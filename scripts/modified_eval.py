@@ -125,7 +125,9 @@ def main():
     policy_dir = args.policy
     
     # Configure according to json file
-    assets_path = "/home/lawrence/ATM/libero/assets/stable_scanned_objects"
+    scripts_dir = Path(__file__).parent
+    atm_dir = Path(scripts_dir).parent
+    assets_path = atm_dir / "libero/assets/stable_scanned_objects"
 
     with open(json_file, 'r') as f:
         data = json.load(f)

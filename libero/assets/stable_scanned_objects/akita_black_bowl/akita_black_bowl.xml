@@ -1,6 +1,6 @@
 <mujoco model="akita_black_bowl">
   <asset>
-  <texture file="texture_[0.0, 0.0, 0.0, 1.0].png" name="tex-akita_black_bowl" type="2d" />
+  <texture file="texture.png" name="tex-akita_black_bowl" type="2d" />
   <material name="akita_black_bowl" reflectance="0.5" texrepeat="1 1" texture="tex-akita_black_bowl" texuniform="false" />
   <mesh file="visual/akita_black_bowl_vis.msh" name="akita_black_bowl_vis" scale="0.7 0.7 0.7" /></asset>
   <worldbody>

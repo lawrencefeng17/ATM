@@ -63,7 +63,9 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    assets_path = "/home/lawrence/ATM/libero/assets/stable_scanned_objects"
+    script_dir = Path(__file__).parent
+    atm_dir = Path(script_dir).parent
+    assets_path = atm_dir / "libero/assets/stable_scanned_objects"
     
     if args.color_mapping:
         color_mapping = args.color_mapping 
@@ -80,7 +82,7 @@ if __name__ == "__main__":
                 replace_color_binary_image(image_path, new_color, output_path=output_path)
                 print(f"Modified image saved to {output_path}") 
     else:
-        color_mappings = "/home/lawrence/ATM/scripts/color_mappings"
+        color_mappings = script_dir / "color_mappings"
     
         # Loop through json files in scripts directory
         for json_file in Path(color_mappings).rglob("*.json"):
